@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Windows
+*.exe
+
+# Local config
+*.log
