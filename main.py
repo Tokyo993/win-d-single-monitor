@@ -254,6 +254,9 @@ WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 
+SC_CLOSE = 0xF060
+WM_SYSCOMMAND = 0x0112
+
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 VK_D = 0x44
@@ -272,6 +275,70 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
         ("time", wintypes.DWORD),
         ("dwExtraInfo", ULONG_PTR),
     ]
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_EXTENDEDKEY = 0x0001
+VK_ESCAPE = 0x1B
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+class INPUT(ctypes.Structure):
+    class _I(ctypes.Union):
+        _fields_ = [("ki", KEYBDINPUT)]
+    _anonymous_ = ("i",)
+    _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+
+user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
+user32.SendInput.restype = wintypes.UINT
+
+def _send_esc():
+    down = INPUT(type=INPUT_KEYBOARD,
+                 ki=KEYBDINPUT(wVk=VK_ESCAPE, wScan=0,
+                               dwFlags=0, time=0, dwExtraInfo=0))
+    up = INPUT(type=INPUT_KEYBOARD,
+               ki=KEYBDINPUT(wVk=VK_ESCAPE, wScan=0,
+                             dwFlags=KEYEVENTF_KEYUP,
+                             time=0, dwExtraInfo=0))
+    arr = (INPUT * 2)(down, up)
+    user32.SendInput(2, arr, ctypes.sizeof(INPUT))
+
+def _send_win_keyup(vk_win: int):
+    up = INPUT(
+        type=INPUT_KEYBOARD,
+        ki=KEYBDINPUT(
+            wVk=vk_win,
+            wScan=0,
+            dwFlags=KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY,
+            time=0,
+            dwExtraInfo=0
+        )
+    )
+    user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
+
+def _send_win_keydown(vk_win: int):
+    down = INPUT(
+        type=INPUT_KEYBOARD,
+        ki=KEYBDINPUT(
+            wVk=vk_win,
+            wScan=0,
+            dwFlags=KEYEVENTF_EXTENDEDKEY,
+            time=0,
+            dwExtraInfo=0
+        )
+    )
+    user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
+
+    
+
 
 LowLevelProc = ctypes.WINFUNCTYPE(ctypes.c_longlong, wintypes.INT, wintypes.WPARAM, wintypes.LPARAM)
 
@@ -312,9 +379,22 @@ class WinDHook:
         self.thread_id = None
 
         self._win_down = False
+        self._win_vk = None
         self._suppress_d_up = False
-
+        self._close_start_on_win_up = False
+        
         self._proc = LowLevelProc(self._callback)
+
+    def _flush_pending_win(self):
+        with self._win_timer_lock:
+            if not self._pending_win or not self._pending_win_vk:
+                return
+            vk = self._pending_win_vk
+            self._pending_win = False
+            self._pending_win_vk = None
+
+        # отправляем Win DOWN в систему "позже"
+        _send_win_keydown(vk)
 
     def _callback(self, nCode, wParam, lParam):
         if nCode < 0:
@@ -324,9 +404,9 @@ class WinDHook:
         vk = int(kbd.vkCode)
 
         is_down = wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)
-        is_up = wParam in (WM_KEYUP, WM_SYSKEYUP)
+        is_up   = wParam in (WM_KEYUP, WM_SYSKEYUP)
 
-        # Track Win key state (pass through Win itself)
+        # Track Win key state, but DO NOT swallow it (so Win+R etc. works)
         if vk in (VK_LWIN, VK_RWIN):
             if is_down:
                 self._win_down = True
@@ -334,16 +414,17 @@ class WinDHook:
                 self._win_down = False
             return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
 
-        # If Win is held and D is pressed -> trigger + suppress ONLY D
+        # Handle Win + D: swallow D so Windows doesn't do global Show Desktop
         if self._win_down and vk == VK_D and is_down:
             try:
                 self.on_win_d()
             except Exception:
                 pass
+
             self._suppress_d_up = True
             return 1  # swallow D down
 
-        # Also swallow corresponding D up to avoid weirdness
+        # Swallow D up (optional)
         if self._suppress_d_up and vk == VK_D and is_up:
             self._suppress_d_up = False
             return 1
