@@ -50,5 +50,3 @@ only on the selected monitor.
 
 python main.py
 
-Потом:
-
