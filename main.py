@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw
 import ctypes
 from ctypes import wintypes
 
+
 # -----------------------------
 # Config
 # -----------------------------
@@ -51,7 +52,7 @@ def save_config(cfg: dict):
 
 
 # -----------------------------
-# Autostart (Startup folder shortcut)
+# Autostart
 # -----------------------------
 
 def startup_folder() -> Path:
@@ -85,8 +86,10 @@ def set_autostart(enabled: bool):
         sf.mkdir(parents=True, exist_ok=True)
 
         lnk = shortcut_path()
+
         if enabled:
-            import win32com.client  # comes with pywin32
+            import win32com.client
+
             shell = win32com.client.Dispatch("WScript.Shell")
             shortcut = shell.CreateShortCut(str(lnk))
 
@@ -100,7 +103,7 @@ def set_autostart(enabled: bool):
             if lnk.exists():
                 lnk.unlink()
     except Exception as e:
-        raise RuntimeError(f"Autostart error: {e}")
+        raise RuntimeError(f"Autostart error: {e}") from e
 
 
 def is_autostart_enabled() -> bool:
@@ -113,13 +116,15 @@ def is_autostart_enabled() -> bool:
 
 def get_monitors():
     monitors = []
+
     for hmon, hdc, rect in win32api.EnumDisplayMonitors(None, None):
         info = win32api.GetMonitorInfo(hmon)
         monitors.append({
             "handle": hmon,
-            "rect": rect,  # (l,t,r,b)
-            "primary": info.get("Flags", 0) == 1
+            "rect": rect,
+            "primary": info.get("Flags", 0) == 1,
         })
+
     return monitors
 
 
@@ -135,9 +140,11 @@ def point_in_rect(x, y, rect):
 
 def get_cursor_monitor_idx(monitors):
     x, y = win32gui.GetCursorPos()
+
     for i, m in enumerate(monitors):
         if point_in_rect(x, y, m["rect"]):
             return i
+
     return None
 
 
@@ -148,12 +155,19 @@ def get_cursor_monitor_idx(monitors):
 def is_real_window(hwnd):
     if not win32gui.IsWindowVisible(hwnd):
         return False
+
     cls = win32gui.GetClassName(hwnd)
-    if cls in ("Progman", "Shell_TrayWnd"):
+    if cls in ("Progman", "Shell_TrayWnd", "WorkerW"):
         return False
+
     ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
     if ex & win32con.WS_EX_TOOLWINDOW:
         return False
+
+    title = win32gui.GetWindowText(hwnd)
+    if not title:
+        return False
+
     return True
 
 
@@ -162,11 +176,14 @@ def get_window_monitor_idx(monitors, hwnd):
         l, t, r, b = win32gui.GetWindowRect(hwnd)
     except Exception:
         return None
+
     cx = (l + r) // 2
     cy = (t + b) // 2
+
     for i, m in enumerate(monitors):
         if point_in_rect(cx, cy, m["rect"]):
             return i
+
     return None
 
 
@@ -177,9 +194,12 @@ def enum_windows_on_monitor(monitors, idx):
         try:
             if not is_real_window(hwnd):
                 return
+
             mi = get_window_monitor_idx(monitors, hwnd)
+
             if mi == idx:
                 placement = win32gui.GetWindowPlacement(hwnd)
+
                 if placement[1] != win32con.SW_SHOWMINIMIZED:
                     result.append(hwnd)
         except Exception:
@@ -214,32 +234,43 @@ class Controller:
 
     def toggle_desktop_single_monitor(self):
         with self._lock:
+            self.monitors = get_monitors()
             monitors = self.monitors
             allowed = self.allowed
 
+        if not monitors:
+            return
+
+        if allowed >= len(monitors):
+            allowed = 0
+            self.set_allowed(0)
+
         cursor_m = get_cursor_monitor_idx(monitors)
 
-        # Important behavior:
-        # We BLOCK Win+D always, to avoid global "show desktop" on both monitors.
-        # But we only execute our minimize/restore if cursor is on allowed monitor.
+        # Win+D is always blocked globally.
+        # Custom minimize/restore works only when cursor is on selected monitor.
         if cursor_m != allowed:
             return
 
         if not self.toggled:
             wins = enum_windows_on_monitor(monitors, allowed)
             self.minimized = wins
+
             for h in wins:
                 try:
                     win32gui.ShowWindow(h, win32con.SW_MINIMIZE)
                 except Exception:
                     pass
+
             self.toggled = True
         else:
             for h in reversed(self.minimized):
                 try:
-                    win32gui.ShowWindow(h, win32con.SW_RESTORE)
+                    if win32gui.IsWindow(h):
+                        win32gui.ShowWindow(h, win32con.SW_RESTORE)
                 except Exception:
                     pass
+
             self.minimized = []
             self.toggled = False
 
@@ -249,23 +280,30 @@ class Controller:
 # -----------------------------
 
 WH_KEYBOARD_LL = 13
+
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 
-SC_CLOSE = 0xF060
-WM_SYSCOMMAND = 0x0112
-
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 VK_D = 0x44
+
+LLKHF_INJECTED = 0x00000010
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_EXTENDEDKEY = 0x0001
+
+WM_QUIT = 0x0012
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
-LRESULT  = ctypes.c_longlong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_long
+LRESULT = ctypes.c_longlong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_long
+
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
     _fields_ = [
@@ -275,11 +313,6 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
         ("time", wintypes.DWORD),
         ("dwExtraInfo", ULONG_PTR),
     ]
-
-INPUT_KEYBOARD = 1
-KEYEVENTF_KEYUP = 0x0002
-KEYEVENTF_EXTENDEDKEY = 0x0001
-VK_ESCAPE = 0x1B
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -291,56 +324,19 @@ class KEYBDINPUT(ctypes.Structure):
         ("dwExtraInfo", ULONG_PTR),
     ]
 
+
 class INPUT(ctypes.Structure):
     class _I(ctypes.Union):
         _fields_ = [("ki", KEYBDINPUT)]
+
     _anonymous_ = ("i",)
     _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+
 
 user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
 user32.SendInput.restype = wintypes.UINT
 
-def _send_esc():
-    down = INPUT(type=INPUT_KEYBOARD,
-                 ki=KEYBDINPUT(wVk=VK_ESCAPE, wScan=0,
-                               dwFlags=0, time=0, dwExtraInfo=0))
-    up = INPUT(type=INPUT_KEYBOARD,
-               ki=KEYBDINPUT(wVk=VK_ESCAPE, wScan=0,
-                             dwFlags=KEYEVENTF_KEYUP,
-                             time=0, dwExtraInfo=0))
-    arr = (INPUT * 2)(down, up)
-    user32.SendInput(2, arr, ctypes.sizeof(INPUT))
-
-def _send_win_keyup(vk_win: int):
-    up = INPUT(
-        type=INPUT_KEYBOARD,
-        ki=KEYBDINPUT(
-            wVk=vk_win,
-            wScan=0,
-            dwFlags=KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY,
-            time=0,
-            dwExtraInfo=0
-        )
-    )
-    user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
-
-def _send_win_keydown(vk_win: int):
-    down = INPUT(
-        type=INPUT_KEYBOARD,
-        ki=KEYBDINPUT(
-            wVk=vk_win,
-            wScan=0,
-            dwFlags=KEYEVENTF_EXTENDEDKEY,
-            time=0,
-            dwExtraInfo=0
-        )
-    )
-    user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
-
-    
-
-
-LowLevelProc = ctypes.WINFUNCTYPE(ctypes.c_longlong, wintypes.INT, wintypes.WPARAM, wintypes.LPARAM)
+LowLevelProc = ctypes.WINFUNCTYPE(LRESULT, wintypes.INT, wintypes.WPARAM, wintypes.LPARAM)
 
 user32.SetWindowsHookExW.argtypes = (wintypes.INT, LowLevelProc, wintypes.HINSTANCE, wintypes.DWORD)
 user32.SetWindowsHookExW.restype = wintypes.HHOOK
@@ -365,13 +361,29 @@ kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
 
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
-WM_QUIT = 0x0012
+
+def _send_win_keydown(vk_win: int):
+    down = INPUT(
+        type=INPUT_KEYBOARD,
+        ki=KEYBDINPUT(
+            wVk=vk_win,
+            wScan=0,
+            dwFlags=KEYEVENTF_EXTENDEDKEY,
+            time=0,
+            dwExtraInfo=0,
+        ),
+    )
+    user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
 
 
 class WinDHook:
     """
-    Blocks only Win+D. Everything else (Win+R etc.) passes normally.
+    Correct logic:
+    - Win key DOWN is swallowed first.
+    - If next key is D, Windows never sees Win or D, so Start Menu does not open.
+    - If next key is another key, we inject Win DOWN and pass that key through.
     """
+
     def __init__(self, on_win_d):
         self.on_win_d = on_win_d
         self.hook = None
@@ -380,41 +392,48 @@ class WinDHook:
 
         self._win_down = False
         self._win_vk = None
+        self._win_sent_to_os = False
         self._suppress_d_up = False
-        self._close_start_on_win_up = False
-        
+
         self._proc = LowLevelProc(self._callback)
-
-    def _flush_pending_win(self):
-        with self._win_timer_lock:
-            if not self._pending_win or not self._pending_win_vk:
-                return
-            vk = self._pending_win_vk
-            self._pending_win = False
-            self._pending_win_vk = None
-
-        # отправляем Win DOWN в систему "позже"
-        _send_win_keydown(vk)
 
     def _callback(self, nCode, wParam, lParam):
         if nCode < 0:
             return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
 
         kbd = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+
+        # Ignore our own SendInput events
+        if kbd.flags & LLKHF_INJECTED:
+            return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
+
         vk = int(kbd.vkCode)
 
         is_down = wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)
-        is_up   = wParam in (WM_KEYUP, WM_SYSKEYUP)
+        is_up = wParam in (WM_KEYUP, WM_SYSKEYUP)
 
-        # Track Win key state, but DO NOT swallow it (so Win+R etc. works)
+        # Hold Win key. Do not let Windows see it yet.
         if vk in (VK_LWIN, VK_RWIN):
             if is_down:
                 self._win_down = True
-            elif is_up:
-                self._win_down = False
-            return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
+                self._win_vk = vk
+                self._win_sent_to_os = False
+                return 1
 
-        # Handle Win + D: swallow D so Windows doesn't do global Show Desktop
+            if is_up:
+                self._win_down = False
+
+                # Win was never sent to Windows, so swallow Win UP too.
+                # This prevents Start Menu from opening after Win+D.
+                if not self._win_sent_to_os:
+                    self._win_vk = None
+                    return 1
+
+                self._win_vk = None
+                self._win_sent_to_os = False
+                return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
+
+        # Custom Win+D
         if self._win_down and vk == VK_D and is_down:
             try:
                 self.on_win_d()
@@ -422,12 +441,18 @@ class WinDHook:
                 pass
 
             self._suppress_d_up = True
-            return 1  # swallow D down
+            return 1
 
-        # Swallow D up (optional)
         if self._suppress_d_up and vk == VK_D and is_up:
             self._suppress_d_up = False
             return 1
+
+        # Any other Win+Key combination:
+        # send Win DOWN back to Windows and let this key pass.
+        if self._win_down and not self._win_sent_to_os and is_down:
+            if self._win_vk:
+                _send_win_keydown(self._win_vk)
+                self._win_sent_to_os = True
 
         return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
 
@@ -436,20 +461,25 @@ class WinDHook:
             return
 
         def run():
-            # install hook in this thread
             self.thread_id = kernel32.GetCurrentThreadId()
             hinst = kernel32.GetModuleHandleW(None)
-            self.hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc, hinst, 0)
+
+            self.hook = user32.SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                self._proc,
+                hinst,
+                0,
+            )
+
             if not self.hook:
                 raise OSError("Failed to install keyboard hook")
 
             msg = wintypes.MSG()
-            # message loop (required)
+
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
                 user32.TranslateMessage(ctypes.byref(msg))
                 user32.DispatchMessageW(ctypes.byref(msg))
 
-            # cleanup
             if self.hook:
                 user32.UnhookWindowsHookEx(self.hook)
                 self.hook = None
@@ -458,7 +488,6 @@ class WinDHook:
         self.thread.start()
 
     def stop(self):
-        # request the hook thread to quit its message loop
         try:
             if self.thread_id:
                 user32.PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0)
@@ -467,7 +496,7 @@ class WinDHook:
 
 
 # -----------------------------
-# UI (Dark Settings)
+# UI
 # -----------------------------
 
 class SettingsWindow:
@@ -485,13 +514,17 @@ class SettingsWindow:
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
-        title = ctk.CTkLabel(self.root, text=APP_NAME, font=ctk.CTkFont(size=20, weight="bold"))
+        title = ctk.CTkLabel(
+            self.root,
+            text=APP_NAME,
+            font=ctk.CTkFont(size=20, weight="bold"),
+        )
         title.pack(pady=(14, 6))
 
         subtitle = ctk.CTkLabel(
             self.root,
-            text="Win + D перехватывается через WinAPI (Win+R и другие комбинации работают нормально).",
-            font=ctk.CTkFont(size=12)
+            text="Win + D перехватывается через WinAPI. Win+R и другие комбинации работают нормально.",
+            font=ctk.CTkFont(size=12),
         )
         subtitle.pack(pady=(0, 10))
 
@@ -511,7 +544,7 @@ class SettingsWindow:
             row,
             values=self.available_monitor_values(),
             variable=self.monitor_var,
-            command=self.on_monitor_change
+            command=self.on_monitor_change,
         )
         self.monitor_menu.pack(side="left", padx=(0, 12))
 
@@ -520,7 +553,7 @@ class SettingsWindow:
             self.root,
             text="Запускать вместе с Windows (Startup)",
             variable=self.autostart_var,
-            command=self.on_autostart_toggle
+            command=self.on_autostart_toggle,
         )
         self.autostart_chk.pack(pady=(8, 6))
 
@@ -541,13 +574,19 @@ class SettingsWindow:
         for i, m in enumerate(self.ctrl.monitors):
             r = rect_info(m["rect"])
             primary = " (PRIMARY)" if m.get("primary") else ""
-            self.mon_text.insert("end", f"Monitor {i+1}{primary}\n")
+
+            self.mon_text.insert("end", f"Monitor {i + 1}{primary}\n")
             self.mon_text.insert("end", f"  Resolution: {r['w']}x{r['h']}\n")
-            self.mon_text.insert("end", f"  Position: x={r['x']} y={r['y']} → x={r['x']+r['w']} y={r['y']+r['h']}\n\n")
+            self.mon_text.insert(
+                "end",
+                f"  Position: x={r['x']} y={r['y']} → x={r['x'] + r['w']} y={r['y'] + r['h']}\n\n",
+            )
 
         self.mon_text.insert(
             "end",
-            "Подсказка:\n- меньший x = монитор левее\n- отрицательный y = монитор выше основного\n"
+            "Подсказка:\n"
+            "- меньший x = монитор левее\n"
+            "- отрицательный y = монитор выше основного\n",
         )
 
     def on_monitor_change(self, value: str):
@@ -559,6 +598,7 @@ class SettingsWindow:
 
     def on_autostart_toggle(self):
         enabled = bool(self.autostart_var.get())
+
         try:
             set_autostart(enabled)
             self.ctrl.cfg["autostart"] = enabled
@@ -573,6 +613,7 @@ class SettingsWindow:
         self.mon_text.configure(state="disabled")
 
         self.monitor_menu.configure(values=self.available_monitor_values())
+
         current = self.ctrl.allowed + 1
         self.monitor_var.set(str(min(current, len(self.ctrl.monitors) or 1)))
 
@@ -582,11 +623,17 @@ class SettingsWindow:
         top.geometry("520x160")
         top.resizable(False, False)
 
-        ctk.CTkLabel(top, text="Ошибка", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(14, 6))
+        ctk.CTkLabel(
+            top,
+            text="Ошибка",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(pady=(14, 6))
+
         box = ctk.CTkTextbox(top, width=480, height=70)
         box.pack()
         box.insert("1.0", msg)
         box.configure(state="disabled")
+
         ctk.CTkButton(top, text="OK", command=top.destroy).pack(pady=10)
 
     def run(self):
@@ -597,6 +644,7 @@ class SettingsWindow:
             self.root.destroy()
         except Exception:
             pass
+
         self.on_close_callback()
 
 
@@ -607,15 +655,21 @@ class SettingsWindow:
 def make_tray_icon_image():
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((10, 12, 54, 52), radius=10, outline=(255, 255, 255, 255), width=3)
+
+    d.rounded_rectangle(
+        (10, 12, 54, 52),
+        radius=10,
+        outline=(255, 255, 255, 255),
+        width=3,
+    )
     d.text((18, 24), "D", fill=(255, 255, 255, 255))
+
     return img
 
 
 def run_app():
     ctrl = Controller()
 
-    # WinAPI hook (blocks only Win+D)
     hook = WinDHook(on_win_d=ctrl.toggle_desktop_single_monitor)
     hook.start()
 
@@ -624,6 +678,7 @@ def run_app():
     def open_settings():
         if settings_window_holder["open"]:
             return
+
         settings_window_holder["open"] = True
 
         def on_close():
@@ -646,6 +701,7 @@ def run_app():
             hook.stop()
         except Exception:
             pass
+
         icon.stop()
 
     icon = pystray.Icon(
@@ -659,12 +715,12 @@ def run_app():
             Item("Use Monitor 2", lambda: set_monitor_2()),
             pystray.Menu.SEPARATOR,
             Item("Exit", exit_app),
-        )
+        ),
     )
 
-    # apply autostart preference
     try:
         desired = bool(ctrl.cfg.get("autostart", False))
+
         if desired != is_autostart_enabled():
             set_autostart(desired)
     except Exception:
