@@ -523,7 +523,7 @@ class SettingsWindow:
 
         subtitle = ctk.CTkLabel(
             self.root,
-            text="Win + D перехватывается через WinAPI. Win+R и другие комбинации работают нормально.",
+            text="Win + D is intercepted through WinAPI. Win+R and other shortcuts continue to work normally.",
             font=ctk.CTkFont(size=12),
         )
         subtitle.pack(pady=(0, 10))
@@ -537,7 +537,7 @@ class SettingsWindow:
         row = ctk.CTkFrame(self.root)
         row.pack(pady=10)
 
-        ctk.CTkLabel(row, text="Разрешённый монитор:").pack(side="left", padx=(12, 8))
+        ctk.CTkLabel(row, text="Selected monitor:").pack(side="left", padx=(12, 8))
 
         self.monitor_var = ctk.StringVar(value=str(self.ctrl.allowed + 1))
         self.monitor_menu = ctk.CTkOptionMenu(
@@ -551,7 +551,7 @@ class SettingsWindow:
         self.autostart_var = ctk.BooleanVar(value=is_autostart_enabled())
         self.autostart_chk = ctk.CTkCheckBox(
             self.root,
-            text="Запускать вместе с Windows (Startup)",
+            text="Start with Windows",
             variable=self.autostart_var,
             command=self.on_autostart_toggle,
         )
@@ -584,9 +584,9 @@ class SettingsWindow:
 
         self.mon_text.insert(
             "end",
-            "Подсказка:\n"
-            "- меньший x = монитор левее\n"
-            "- отрицательный y = монитор выше основного\n",
+            "Tip:\n"
+            "- smaller x = monitor is further left\n"
+            "- negative y = monitor is above the primary monitor\n",
         )
 
     def on_monitor_change(self, value: str):
@@ -625,7 +625,7 @@ class SettingsWindow:
 
         ctk.CTkLabel(
             top,
-            text="Ошибка",
+            text="Error",
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(pady=(14, 6))
 
