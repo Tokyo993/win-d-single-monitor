@@ -1,52 +1,41 @@
-\# Win+D Single Monitor
+# Win+D Single Monitor
 
+I use two monitors every day and one thing always annoyed me:
 
+When you press **Win + D**, Windows minimizes windows on **all monitors**.
 
-Windows utility that intercepts Win+D and applies "Show Desktop"
+Sometimes I only want to clear the monitor I'm currently working on while keeping everything open on the second screen.
 
-only to the monitor under the cursor.
+So I built this small utility.
 
+It intercepts **Win + D** and applies "Show Desktop" only to the monitor where your cursor is currently located.
 
+<p align="center">
+  <img src="assets/app.png" width="700">
+</p>
 
-\## Features
+## Features
 
-\- Low-level WinAPI hook (WH\_KEYBOARD\_LL)
+- Per-monitor Show Desktop
+- Works with multiple monitors
+- Keeps normal Windows shortcuts working (Win+R, Win+E, Win+L, etc.)
+- Autostart support
+- Lightweight and runs in the background
 
-\- Blocks only Win+D
+## Why?
 
-\- Tray icon
+Because Windows still doesn't provide a built-in way to use Show Desktop on a single monitor.
 
-\- Autostart support
+## Installation
 
-\- Dark settings UI
+1. Download the latest release
+2. Run `WinDSingleMonitor.exe`
+3. Choose the monitor you want to control
 
+## Built With
 
-
-\## How it works
-
-Uses a low-level keyboard hook and manually minimizes windows
-
-only on the selected monitor.
-
-
-
-\## Requirements
-
-\- Windows 10 / 11
-
-\- Python 3.10+
-
-\- pywin32
-
-\- customtkinter
-
-\- pystray
-
-\- Pillow
-
-
-
-\## Run
-
-python main.py
-
+- Python
+- pywin32
+- CustomTkinter
+- pystray
+- Pillow
